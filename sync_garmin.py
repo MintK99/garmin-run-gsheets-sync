@@ -101,28 +101,32 @@ def main():
     # Get existing dates to avoid duplicates
     try:
         existing_data = sheet.get_all_values()
-        existing_dates = set()
-        if len(existing_data) > 1:  # If there's data beyond headers
-            for row in existing_data[1:]:  # Skip header row
-                if row and row[0]:  # If date column exists
-                    existing_dates.add(row[0])
-        print(f"Found {len(existing_dates)} existing entries")
+        existing_activity_ids = set()
+        if len(existing_data) > 1:
+            for row in existing_data[1:]:
+                if row and row[0]:
+                    existing_activity_ids.add(row[0])
+        print(f"Found {len(existing_activity_ids)} existing entries")
     except Exception as e:
         print(f"Warning: Could not check existing data: {e}")
-        existing_dates = set()
+        existing_activity_ids = set()
     
     # Process each running activity
     new_entries = 0
     for activity in running_activities:
         try:
-            # Parse activity date
-            activity_date = activity.get('startTimeLocal', '')[:10]  # Get YYYY-MM-DD
-            
-            # Skip if already in sheet
-            if activity_date in existing_dates:
-                print(f"Skipping {activity_date} - already exists")
+            activity_id = str(activity.get('activityId', ''))
+            if not activity_id:
+                print("Skipping activity - missing activityId")
                 continue
-            
+    
+            # Skip if already in sheet (by activityId)
+            if activity_id in existing_activity_ids:
+                print(f"Skipping activityId {activity_id} - already exists")
+                continue
+    
+            activity_date = activity.get('startTimeLocal', '')[:10]  # YYYY-MM-DD
+    
             # Extract metrics
             activity_name = activity.get('activityName', 'Run')
             distance_meters = activity.get('distance', 0)
@@ -136,9 +140,10 @@ def main():
             avg_cadence = activity.get('averageRunningCadenceInStepsPerMinute', 0) or 0
             elevation_gain = round(activity.get('elevationGain', 0), 1) if activity.get('elevationGain') else 0
             activity_type = activity.get('activityType', {}).get('typeKey', 'running')
-            
-            # Prepare row
+    
+            # Prepare row (activity_id added)
             row = [
+                activity_id,
                 activity_date,
                 activity_name,
                 distance_km,
@@ -151,15 +156,16 @@ def main():
                 elevation_gain,
                 activity_type
             ]
-            
-            # Append to sheet
+    
             sheet.append_row(row)
-            print(f"✅ Added: {activity_date} - {activity_name} ({distance_km} km)")
+            print(f"✅ Added: {activity_date} - {activity_name} ({distance_km} km) [id={activity_id}]")
             new_entries += 1
-            
+            existing_activity_ids.add(activity_id)  # avoid duplicates within same run
+    
         except Exception as e:
             print(f"❌ Error processing activity: {e}")
             continue
+
     
     if new_entries > 0:
         print(f"\n🎉 Successfully added {new_entries} new running activities!")
