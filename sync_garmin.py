@@ -26,51 +26,61 @@ def format_pace(distance_meters, duration_seconds):
     pace_seconds = duration_seconds / distance_km
     return round(pace_seconds / 60, 2)  # Convert to min/km
 
-def extract_shoe_from_activity_detail(detail: dict):
+def get_activity_detail_for_gear(garmin, activity_id: int) -> dict:
     """
-    Garmin activity detail response에서 gear(신발) 정보를 최대한 안전하게 추출.
-    반환: (shoe_name, shoe_id) 둘 다 없으면 ("", "")
+    gear(신발) 정보가 들어있을 가능성이 높은 '활동 요약/상세' 응답을 가져온다.
+    라이브러리 버전에 따라 메서드명이 달라서 순차적으로 시도한다.
     """
-    if not detail or not isinstance(detail, dict):
+    candidates = [
+        "get_activity_summary",        # 가장 그럴듯한 이름
+        "get_activity",                # 어떤 버전에서는 activityId로 요약을 주기도 함
+        "get_activity_details",        # 지금은 metrics를 주고 있지만, 버전에 따라 요약일 수도 있어 fallback
+        "get_activity_detail",
+    ]
+
+    last_err = None
+    for m in candidates:
+        if hasattr(garmin, m):
+            try:
+                return getattr(garmin, m)(activity_id) or {}
+            except Exception as e:
+                last_err = e
+
+    # 아무것도 못 가져오면 빈 dict
+    if last_err:
+        print(f"Warning: could not fetch activity detail for gear. activityId={activity_id} err={last_err}")
+    return {}
+
+def extract_shoe_from_detail(detail: dict):
+    """
+    활동 요약/상세 응답에서 신발(gear) 추출.
+    케이스가 여러 개라 후보 키를 폭넓게 봄.
+    """
+    if not isinstance(detail, dict):
         return "", ""
 
-    # 1) 가장 흔한 케이스: detail 안에 gear 리스트가 있는 경우
-    # 예: detail["gear"] = [{...}, {...}]
+    # 대표 케이스: gear 리스트
     gear_list = detail.get("gear")
     if isinstance(gear_list, list) and gear_list:
-        g0 = gear_list[0]  # 일반적으로 활동당 1개 신발이므로 첫 번째 사용
-        shoe_name = (
-            g0.get("customMakeModel")
-            or g0.get("displayName")
-            or g0.get("name")
-            or ""
-        )
-        shoe_id = str(g0.get("gearId") or g0.get("id") or "")
-        return shoe_name, shoe_id
+        g = gear_list[0]
+        name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or ""
+        gid = str(g.get("gearId") or g.get("id") or "")
+        return name, gid
 
-    # 2) 다른 형태로 들어오는 케이스들(계정/버전에 따라 다름)
-    # 예: detail["activityGearDTOs"] / detail["activityGear"] 등
+    # 다른 케이스들
     for key in ["activityGearDTOs", "activityGear", "gears", "activityGearList"]:
         v = detail.get(key)
         if isinstance(v, list) and v:
-            g0 = v[0]
-            shoe_name = (
-                g0.get("customMakeModel")
-                or g0.get("displayName")
-                or g0.get("name")
-                or ""
-            )
-            shoe_id = str(g0.get("gearId") or g0.get("id") or "")
-            return shoe_name, shoe_id
+            g = v[0]
+            name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or ""
+            gid = str(g.get("gearId") or g.get("id") or "")
+            return name, gid
 
-    # 3) 어떤 계정에서는 gear가 "요약 필드"로만 들어오는 경우도 있음
-    # 예: detail["gearName"], detail["gearId"]
-    shoe_name = detail.get("gearName") or ""
-    shoe_id = str(detail.get("gearId") or "")
-    if shoe_name or shoe_id:
-        return shoe_name, shoe_id
+    # 요약 필드로만 오는 케이스
+    name = detail.get("gearName") or ""
+    gid = str(detail.get("gearId") or "")
+    return name, gid
 
-    return "", ""
 
 def main():
     print("Starting Garmin running activities sync...")
@@ -190,25 +200,13 @@ def main():
             activity_id = activity.get("activityId")
             shoe_name, shoe_id = "", ""
             
-            try:
-                # 활동 상세 조회 (메서드명은 라이브러리 버전에 따라 다를 수 있음)
-                # 1순위: get_activity_details
-                if hasattr(garmin, "get_activity_details"):
-                    detail = garmin.get_activity_details(activity_id)
-                # 2순위: get_activity_detail
-                elif hasattr(garmin, "get_activity_detail"):
-                    detail = garmin.get_activity_detail(activity_id)
-                else:
-                    detail = {}
-
-                print("DETAIL KEYS:", list(detail.keys())[:50]) # for Debug
-                shoe_name, shoe_id = extract_shoe_from_activity_detail(detail)
+            detail = get_activity_detail_for_gear(garmin, activity_id)
             
-            except Exception as e:
-                # 신발 정보만 못 가져오고, 활동 자체는 저장하고 싶다면 조용히 패스
-                print(f"Warning: could not fetch gear for activityId {activity_id}: {e}")
-                shoe_name, shoe_id = "", ""
-
+            # 🔎 디버그: gear가 있는지 확인 (처음엔 꼭 찍어보세요)
+            print(f"activityId={activity_id} DETAIL_FOR_GEAR_KEYS:", list(detail.keys())[:80])
+            
+            shoe_name, shoe_id = extract_shoe_from_detail(detail)
+            print(f"activityId={activity_id} shoe_name={shoe_name} shoe_id={shoe_id}")
     
             # Prepare row (activity_id added)
             row = [
