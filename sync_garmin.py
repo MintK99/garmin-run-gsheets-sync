@@ -26,6 +26,52 @@ def format_pace(distance_meters, duration_seconds):
     pace_seconds = duration_seconds / distance_km
     return round(pace_seconds / 60, 2)  # Convert to min/km
 
+def extract_shoe_from_activity_detail(detail: dict):
+    """
+    Garmin activity detail response에서 gear(신발) 정보를 최대한 안전하게 추출.
+    반환: (shoe_name, shoe_id) 둘 다 없으면 ("", "")
+    """
+    if not detail or not isinstance(detail, dict):
+        return "", ""
+
+    # 1) 가장 흔한 케이스: detail 안에 gear 리스트가 있는 경우
+    # 예: detail["gear"] = [{...}, {...}]
+    gear_list = detail.get("gear")
+    if isinstance(gear_list, list) and gear_list:
+        g0 = gear_list[0]  # 일반적으로 활동당 1개 신발이므로 첫 번째 사용
+        shoe_name = (
+            g0.get("customMakeModel")
+            or g0.get("displayName")
+            or g0.get("name")
+            or ""
+        )
+        shoe_id = str(g0.get("gearId") or g0.get("id") or "")
+        return shoe_name, shoe_id
+
+    # 2) 다른 형태로 들어오는 케이스들(계정/버전에 따라 다름)
+    # 예: detail["activityGearDTOs"] / detail["activityGear"] 등
+    for key in ["activityGearDTOs", "activityGear", "gears", "activityGearList"]:
+        v = detail.get(key)
+        if isinstance(v, list) and v:
+            g0 = v[0]
+            shoe_name = (
+                g0.get("customMakeModel")
+                or g0.get("displayName")
+                or g0.get("name")
+                or ""
+            )
+            shoe_id = str(g0.get("gearId") or g0.get("id") or "")
+            return shoe_name, shoe_id
+
+    # 3) 어떤 계정에서는 gear가 "요약 필드"로만 들어오는 경우도 있음
+    # 예: detail["gearName"], detail["gearId"]
+    shoe_name = detail.get("gearName") or ""
+    shoe_id = str(detail.get("gearId") or "")
+    if shoe_name or shoe_id:
+        return shoe_name, shoe_id
+
+    return "", ""
+
 def main():
     print("Starting Garmin running activities sync...")
     
@@ -140,6 +186,28 @@ def main():
             avg_cadence = activity.get('averageRunningCadenceInStepsPerMinute', 0) or 0
             elevation_gain = round(activity.get('elevationGain', 0), 1) if activity.get('elevationGain') else 0
             activity_type = activity.get('activityType', {}).get('typeKey', 'running')
+
+            activity_id = activity.get("activityId")
+            shoe_name, shoe_id = "", ""
+            
+            try:
+                # 활동 상세 조회 (메서드명은 라이브러리 버전에 따라 다를 수 있음)
+                # 1순위: get_activity_details
+                if hasattr(garmin, "get_activity_details"):
+                    detail = garmin.get_activity_details(activity_id)
+                # 2순위: get_activity_detail
+                elif hasattr(garmin, "get_activity_detail"):
+                    detail = garmin.get_activity_detail(activity_id)
+                else:
+                    detail = {}
+            
+                shoe_name, shoe_id = extract_shoe_from_activity_detail(detail)
+            
+            except Exception as e:
+                # 신발 정보만 못 가져오고, 활동 자체는 저장하고 싶다면 조용히 패스
+                print(f"Warning: could not fetch gear for activityId {activity_id}: {e}")
+                shoe_name, shoe_id = "", ""
+
     
             # Prepare row (activity_id added)
             row = [
@@ -154,7 +222,9 @@ def main():
                 calories,
                 avg_cadence,
                 elevation_gain,
-                activity_type
+                activity_type,
+                shoe_name,   # NEW
+                shoe_id,     # NEW
             ]
     
             sheet.append_row(row)
