@@ -26,16 +26,16 @@ def format_pace(distance_meters, duration_seconds):
     pace_seconds = duration_seconds / distance_km
     return round(pace_seconds / 60, 2)  # Convert to min/km
 
-def build_gear_map(garmin) -> dict:
+def build_gear_map(garmin, user_profile_number: int) -> dict:
     """
     Garmin gear 목록을 가져와 gearId -> 이름 매핑을 만든다.
     """
     gear_map = {}
-    gears = garmin.get_gear()  # 메서드 존재 확인됨
 
-    # 반환 형태 방어: dict 또는 list일 수 있음
+    gears = garmin.get_gear(user_profile_number)
+
+    # 반환 형태 방어
     if isinstance(gears, dict):
-        # 흔한 케이스들
         gears = gears.get("gearList") or gears.get("gear") or gears.get("gears") or []
 
     if isinstance(gears, list):
@@ -46,7 +46,6 @@ def build_gear_map(garmin) -> dict:
                 gear_map[gid] = name
 
     return gear_map
-
 
 def get_shoes_for_activity(garmin, activity_id: int, gear_map: dict):
     """
@@ -113,7 +112,17 @@ def main():
         print("✅ Connected to Garmin")
         
         print("Loading gear list...")
-        gear_map = build_gear_map(garmin)
+        
+        # 1) user profile number 획득
+        profile = garmin.get_user_profile()
+        user_profile_number = profile.get("userProfileNumber")
+        
+        if not user_profile_number:
+            raise RuntimeError("Failed to get userProfileNumber from Garmin profile")
+        
+        # 2) gear map 생성
+        gear_map = build_gear_map(garmin, user_profile_number)
+
         print(f"✅ Loaded {len(gear_map)} gears")
 
     except Exception as e:
