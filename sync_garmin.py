@@ -82,46 +82,79 @@ def get_shoes_for_activity(garmin, activity_id: int, gear_map: dict):
     return shoe_names_csv, shoe_ids_csv
 
 def get_user_profile_number(garmin) -> int:
-    profile = garmin.get_user_profile()
-
-    if not isinstance(profile, dict):
-        raise RuntimeError(f"Unexpected profile type: {type(profile)}")
-
-    # 🔎 1회 디버그: 키 확인 (Actions 로그에서 확인 후 지워도 됨)
-    print("PROFILE KEYS:", list(profile.keys())[:80])
-
-    # 후보 키들 (버전/언어/엔드포인트에 따라 다름)
-    candidates = [
-        "userProfileNumber",
-        "profileId",
-        "userProfileId",
-        "userId",
-        "displayName",  # (숫자 아님이라 보통 실패, but 방어용)
+    """
+    garminconnect 버전/계정에 따라 userProfileNumber가 여러 엔드포인트에 있을 수 있어
+    후보 메서드를 순차 호출해 찾는다.
+    """
+    method_candidates = [
+        "get_user_profile",                 # 지금은 health-like payload
+        "get_full_name",                    # 있을 수도 있지만 숫자는 안 나옴 (fallback용)
+        "get_userprofile",                  # 일부 구현에서 사용
+        "get_user_profile_settings",         # 설정/프로필 관련
+        "get_user_settings",                # 설정 관련
+        "get_social_profile",               # Connect 프로필
+        "get_profile",                      # generic
+        "get_personal_information",          # 개인 정보
     ]
 
-    for k in candidates:
-        v = profile.get(k)
-        # 숫자형이면 바로 리턴
-        if isinstance(v, int):
-            return v
-        # 문자열 숫자면 변환
-        if isinstance(v, str) and v.isdigit():
-            return int(v)
+    key_candidates = [
+        "userProfileNumber",
+        "userProfileId",
+        "profileId",
+        "id",
+        "userId",
+    ]
 
-    # 일부 응답은 중첩 구조일 수 있어 추가 탐색
-    for parent_key in ["userProfile", "profile", "data"]:
-        sub = profile.get(parent_key)
-        if isinstance(sub, dict):
-            for k in candidates:
-                v = sub.get(k)
-                if isinstance(v, int):
-                    return v
-                if isinstance(v, str) and v.isdigit():
-                    return int(v)
+    def extract_number(obj, tag):
+        if not isinstance(obj, dict):
+            return None
 
-    # 못 찾으면 profile 전체를 일부 출력 (민감정보 제외를 위해 keys만)
-    raise RuntimeError("Failed to locate user profile number field in profile response")
+        # 디버그: 어떤 payload인지 확인 (키만)
+        print(f"{tag} KEYS:", list(obj.keys())[:80])
 
+        # 1) 최상위 키에서 탐색
+        for k in key_candidates:
+            v = obj.get(k)
+            if isinstance(v, int):
+                return v
+            if isinstance(v, str) and v.isdigit():
+                return int(v)
+
+        # 2) 흔한 중첩 위치들
+        for parent_key in ["userProfile", "profile", "data", "userData", "socialProfile", "settings"]:
+            sub = obj.get(parent_key)
+            if isinstance(sub, dict):
+                for k in key_candidates:
+                    v = sub.get(k)
+                    if isinstance(v, int):
+                        return v
+                    if isinstance(v, str) and v.isdigit():
+                        return int(v)
+
+        return None
+
+    last_err = None
+
+    for m in method_candidates:
+        if hasattr(garmin, m):
+            try:
+                res = getattr(garmin, m)()
+                n = extract_number(res, f"PROFILE({m})")
+                if n is not None:
+                    return n
+            except Exception as e:
+                last_err = e
+
+    # 마지막 수단: garmin 객체 속성에 user profile number가 캐시돼 있는 경우
+    for attr in ["userProfileNumber", "user_profile_number", "profile_number"]:
+        if hasattr(garmin, attr):
+            v = getattr(garmin, attr)
+            if isinstance(v, int):
+                print(f"Found profile number from attribute: {attr}={v}")
+                return v
+
+    raise RuntimeError(f"Failed to locate user profile number via available methods. last_err={last_err}")
+    
 def main():
     print("Starting Garmin running activities sync...")
     
@@ -151,6 +184,10 @@ def main():
         garmin = Garmin(garmin_email, garmin_password)
         garmin.login()
         print("✅ Connected to Garmin")
+
+        print("Profile-related methods:",
+          [m for m in dir(garmin) if "profile" in m.lower() or "user" in m.lower() or "settings" in m.lower()])
+
         
         print("Loading gear list...")
         
