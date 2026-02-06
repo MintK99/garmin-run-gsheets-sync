@@ -26,61 +26,61 @@ def format_pace(distance_meters, duration_seconds):
     pace_seconds = duration_seconds / distance_km
     return round(pace_seconds / 60, 2)  # Convert to min/km
 
-def get_activity_detail_for_gear(garmin, activity_id: int) -> dict:
+def build_gear_map(garmin) -> dict:
     """
-    gear(신발) 정보가 들어있을 가능성이 높은 '활동 요약/상세' 응답을 가져온다.
-    라이브러리 버전에 따라 메서드명이 달라서 순차적으로 시도한다.
+    Garmin gear 목록을 가져와 gearId -> 이름 매핑을 만든다.
     """
-    candidates = [
-        "get_activity_summary",        # 가장 그럴듯한 이름
-        "get_activity",                # 어떤 버전에서는 activityId로 요약을 주기도 함
-        "get_activity_details",        # 지금은 metrics를 주고 있지만, 버전에 따라 요약일 수도 있어 fallback
-        "get_activity_detail",
-    ]
+    gear_map = {}
+    gears = garmin.get_gear()  # 메서드 존재 확인됨
 
-    last_err = None
-    for m in candidates:
-        if hasattr(garmin, m):
-            try:
-                return getattr(garmin, m)(activity_id) or {}
-            except Exception as e:
-                last_err = e
+    # 반환 형태 방어: dict 또는 list일 수 있음
+    if isinstance(gears, dict):
+        # 흔한 케이스들
+        gears = gears.get("gearList") or gears.get("gear") or gears.get("gears") or []
 
-    # 아무것도 못 가져오면 빈 dict
-    if last_err:
-        print(f"Warning: could not fetch activity detail for gear. activityId={activity_id} err={last_err}")
-    return {}
+    if isinstance(gears, list):
+        for g in gears:
+            gid = str(g.get("gearId") or g.get("id") or "")
+            name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or ""
+            if gid:
+                gear_map[gid] = name
 
-def extract_shoe_from_detail(detail: dict):
+    return gear_map
+
+
+def get_shoes_for_activity(garmin, activity_id: int, gear_map: dict):
     """
-    활동 요약/상세 응답에서 신발(gear) 추출.
-    케이스가 여러 개라 후보 키를 폭넓게 봄.
+    특정 activity에 연결된 gear(신발) 정보를 반환.
+    반환: (shoe_names_csv, shoe_ids_csv)
     """
-    if not isinstance(detail, dict):
+    try:
+        ag = garmin.get_activity_gear(activity_id)
+    except Exception:
         return "", ""
 
-    # 대표 케이스: gear 리스트
-    gear_list = detail.get("gear")
-    if isinstance(gear_list, list) and gear_list:
-        g = gear_list[0]
-        name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or ""
+    # 반환 형태 방어
+    # 보통 list 또는 dict(list 포함) 형태
+    gear_items = []
+    if isinstance(ag, list):
+        gear_items = ag
+    elif isinstance(ag, dict):
+        gear_items = ag.get("gear") or ag.get("gearList") or ag.get("gears") or []
+
+    gear_ids = []
+    shoe_names = []
+    for g in gear_items:
         gid = str(g.get("gearId") or g.get("id") or "")
-        return name, gid
+        if not gid:
+            continue
+        gear_ids.append(gid)
+        shoe_names.append(gear_map.get(gid, ""))
 
-    # 다른 케이스들
-    for key in ["activityGearDTOs", "activityGear", "gears", "activityGearList"]:
-        v = detail.get(key)
-        if isinstance(v, list) and v:
-            g = v[0]
-            name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or ""
-            gid = str(g.get("gearId") or g.get("id") or "")
-            return name, gid
+    # activity에 신발이 1개면 보통 첫 번째만 써도 됨.
+    # 여기서는 안전하게 CSV로 반환.
+    shoe_names_csv = ", ".join([n for n in shoe_names if n])  # 빈 이름 제거
+    shoe_ids_csv = ", ".join(gear_ids)
 
-    # 요약 필드로만 오는 케이스
-    name = detail.get("gearName") or ""
-    gid = str(detail.get("gearId") or "")
-    return name, gid
-
+    return shoe_names_csv, shoe_ids_csv
 
 def main():
     print("Starting Garmin running activities sync...")
@@ -112,8 +112,10 @@ def main():
         garmin.login()
         print("✅ Connected to Garmin")
         
-        print("Garmin methods hint:",
-          [m for m in dir(garmin) if "gear" in m.lower() or "equip" in m.lower()])
+        print("Loading gear list...")
+        gear_map = build_gear_map(garmin)
+        print(f"✅ Loaded {len(gear_map)} gears")
+
     except Exception as e:
         print(f"❌ Failed to connect to Garmin: {e}")
         return
@@ -201,7 +203,7 @@ def main():
             activity_type = activity.get('activityType', {}).get('typeKey', 'running')
 
             activity_id = activity.get("activityId")
-            shoe_name, shoe_id = "", ""
+            shoe_name, shoe_id = get_shoes_for_activity(garmin, int(activity_id), gear_map)
             
             detail = get_activity_detail_for_gear(garmin, activity_id)
             
