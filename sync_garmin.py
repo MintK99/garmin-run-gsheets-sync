@@ -27,59 +27,53 @@ def format_pace(distance_meters, duration_seconds):
     return round(pace_seconds / 60, 2)  # Convert to min/km
 
 def build_gear_map(garmin, user_profile_number: int) -> dict:
-    """
-    Garmin gear 목록을 가져와 gearId -> 이름 매핑을 만든다.
-    """
     gear_map = {}
-
     gears = garmin.get_gear(user_profile_number)
 
-    # 반환 형태 방어
+    # 디버그 (1~2회 확인 후 지워도 됨)
+    print("RAW get_gear type:", type(gears))
     if isinstance(gears, dict):
-        gears = gears.get("gearList") or gears.get("gear") or gears.get("gears") or []
+        print("RAW get_gear KEYS:", list(gears.keys())[:80])
+
+    # dict면 내부에서 list를 찾아 꺼냄
+    gear_list = None
 
     if isinstance(gears, list):
-        for g in gears:
-            gid = str(g.get("gearId") or g.get("id") or "")
-            name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or ""
-            if gid:
-                gear_map[gid] = name
+        gear_list = gears
+
+    elif isinstance(gears, dict):
+        # 가능한 후보 키들을 순서대로 탐색
+        for k in ["gearList", "gear", "gears", "equipment", "equipmentList", "items"]:
+            v = gears.get(k)
+            if isinstance(v, list):
+                gear_list = v
+                break
+
+        # 더 깊게 중첩된 구조도 방어
+        if gear_list is None:
+            for k in ["data", "response", "payload"]:
+                sub = gears.get(k)
+                if isinstance(sub, dict):
+                    for kk in ["gearList", "gear", "gears", "items"]:
+                        v = sub.get(kk)
+                        if isinstance(v, list):
+                            gear_list = v
+                            break
+                if gear_list is not None:
+                    break
+
+    if not isinstance(gear_list, list):
+        return gear_map  # empty
+
+    for g in gear_list:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("gearId") or g.get("id") or g.get("uuid") or "")
+        name = g.get("customMakeModel") or g.get("displayName") or g.get("name") or g.get("equipmentName") or ""
+        if gid:
+            gear_map[gid] = name
 
     return gear_map
-
-def get_shoes_for_activity(garmin, activity_id: int, gear_map: dict):
-    """
-    특정 activity에 연결된 gear(신발) 정보를 반환.
-    반환: (shoe_names_csv, shoe_ids_csv)
-    """
-    try:
-        ag = garmin.get_activity_gear(activity_id)
-    except Exception:
-        return "", ""
-
-    # 반환 형태 방어
-    # 보통 list 또는 dict(list 포함) 형태
-    gear_items = []
-    if isinstance(ag, list):
-        gear_items = ag
-    elif isinstance(ag, dict):
-        gear_items = ag.get("gear") or ag.get("gearList") or ag.get("gears") or []
-
-    gear_ids = []
-    shoe_names = []
-    for g in gear_items:
-        gid = str(g.get("gearId") or g.get("id") or "")
-        if not gid:
-            continue
-        gear_ids.append(gid)
-        shoe_names.append(gear_map.get(gid, ""))
-
-    # activity에 신발이 1개면 보통 첫 번째만 써도 됨.
-    # 여기서는 안전하게 CSV로 반환.
-    shoe_names_csv = ", ".join([n for n in shoe_names if n])  # 빈 이름 제거
-    shoe_ids_csv = ", ".join(gear_ids)
-
-    return shoe_names_csv, shoe_ids_csv
 
 def get_user_profile_number(garmin) -> int:
     """
@@ -289,12 +283,6 @@ def main():
             activity_id = activity.get("activityId")
             shoe_name, shoe_id = get_shoes_for_activity(garmin, int(activity_id), gear_map)
             
-            detail = get_activity_detail_for_gear(garmin, activity_id)
-            
-            # 🔎 디버그: gear가 있는지 확인 (처음엔 꼭 찍어보세요)
-            print(f"activityId={activity_id} DETAIL_FOR_GEAR_KEYS:", list(detail.keys())[:80])
-            
-            shoe_name, shoe_id = extract_shoe_from_detail(detail)
             print(f"activityId={activity_id} shoe_name={shoe_name} shoe_id={shoe_id}")
     
             # Prepare row (activity_id added)
