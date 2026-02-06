@@ -148,7 +148,42 @@ def get_user_profile_number(garmin) -> int:
                 return v
 
     raise RuntimeError(f"Failed to locate user profile number via available methods. last_err={last_err}")
-    
+
+def get_shoes_for_activity(garmin, activity_id: int, gear_map: dict):
+    """
+    특정 activity에 연결된 gear(신발) 정보를 반환.
+    반환: (shoe_names_csv, shoe_ids_csv)
+    """
+    try:
+        ag = garmin.get_activity_gear(activity_id)
+    except Exception as e:
+        print(f"Warning: get_activity_gear failed for activityId={activity_id}: {e}")
+        return "", ""
+
+    # 반환 형태 방어
+    gear_items = []
+    if isinstance(ag, list):
+        gear_items = ag
+    elif isinstance(ag, dict):
+        gear_items = ag.get("gear") or ag.get("gearList") or ag.get("gears") or ag.get("items") or []
+
+    gear_ids = []
+    shoe_names = []
+
+    for g in gear_items:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("gearId") or g.get("id") or g.get("uuid") or "")
+        if not gid:
+            continue
+        gear_ids.append(gid)
+        shoe_names.append(gear_map.get(gid, ""))
+
+    shoe_names_csv = ", ".join([n for n in shoe_names if n])
+    shoe_ids_csv = ", ".join(gear_ids)
+
+    return shoe_names_csv, shoe_ids_csv
+
 def main():
     print("Starting Garmin running activities sync...")
     
