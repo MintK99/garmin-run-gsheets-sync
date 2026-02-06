@@ -200,7 +200,8 @@ def main():
                     detail = garmin.get_activity_detail(activity_id)
                 else:
                     detail = {}
-            
+
+                print("DETAIL KEYS:", list(detail.keys())[:50]) # for Debug
                 shoe_name, shoe_id = extract_shoe_from_activity_detail(detail)
             
             except Exception as e:
