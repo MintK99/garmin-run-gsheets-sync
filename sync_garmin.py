@@ -111,6 +111,9 @@ def main():
         garmin = Garmin(garmin_email, garmin_password)
         garmin.login()
         print("✅ Connected to Garmin")
+        
+        print("Garmin methods hint:",
+          [m for m in dir(garmin) if "gear" in m.lower() or "equip" in m.lower()])
     except Exception as e:
         print(f"❌ Failed to connect to Garmin: {e}")
         return
