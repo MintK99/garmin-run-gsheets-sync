@@ -1,9 +1,9 @@
 name: Garmin to Google Sheets Sync
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 12 * * *'  # Runs daily at 6 AM UTC
-  workflow_dispatch:  # Allows manual trigger from GitHub UI
+    - cron: "0 12 * * *"
 
 jobs:
   sync:
